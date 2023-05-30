@@ -1,0 +1,27 @@
+---
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: create-mysql-source-connector
+  labels:
+    app: create-mysql-source-connector
+    app.kubernetes.io/part-of: sfp-cdc-jobs
+spec:
+  template:
+    spec:
+      containers:
+      - name: create-mysql-source-connector
+        image: quay.io/debezium/tooling:1.2
+        command: [
+          "bash","/home/create_connector.sh","mysql_dbz_source_connector.json"
+        ]
+        volumeMounts:
+            - name: connectors-definition
+              mountPath: /home
+
+      restartPolicy: OnFailure
+      volumes:
+        - name: connectors-definition
+          configMap:
+            name: connectors-config
+  backoffLimit: 5

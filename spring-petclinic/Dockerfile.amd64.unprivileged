@@ -1,0 +1,3 @@
+FROM --platform=linux/amd64 bitnami/tomcat:9.0.16
+COPY ./target/petclinic.war /opt/bitnami/tomcat/webapps
+ENV ALLOW_EMPTY_PASSWORD=yes

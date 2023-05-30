@@ -1,0 +1,2 @@
+FROM --platform=linux/arm64 arm64v8/tomcat:9.0.75-jdk8-temurin-jammy
+COPY ./target/petclinic.war /usr/local/tomcat/webapps/

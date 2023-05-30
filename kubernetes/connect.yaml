@@ -1,0 +1,212 @@
+apiVersion: v1
+kind: Service
+metadata:
+  name: connect
+  labels:
+    app: connect
+spec:
+  ports:
+    - port: 8083
+      name: connect
+  selector:
+    app: connect
+  type: ClusterIP
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  annotations:
+    app.openshift.io/connects-to: '[{"apiVersion":"apps/v1","kind":"Deployment","name":"kafka"},{"apiVersion":"apps/v1","kind":"Deployment","name":"mongodb"},{"apiVersion":"apps/v1","kind":"Deployment","name":"mysql"}]'
+  name: connect
+  labels:
+    app: connect
+    app.kubernetes.io/part-of: sfp-infra
+spec:
+  selector:
+    matchLabels:
+      app: connect
+  strategy:
+    type: Recreate
+  template:
+    metadata:
+      labels:
+        app: connect
+    spec:
+      containers:
+      - image: quay.io/hgrahsl/sfp-kafka-connect:1.0.0-amd64
+        name: connect
+        command: [
+          "sh", "-c",
+          "bin/connect-distributed.sh config/connect-distributed.properties"
+        ]
+        env:
+          - name: LOG_DIR
+            value: /tmp/logs
+        volumeMounts:
+            - name: config
+              mountPath: /opt/kafka/config/
+        imagePullPolicy: IfNotPresent
+      volumes:
+        - name: config
+          configMap:
+            name: connect-config
+---
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: connect-config
+  labels:
+    app: connect
+data:
+  connect-log4j.properties: |
+    log4j.rootLogger=INFO, stdout, connectAppender
+
+    log4j.appender.stdout=org.apache.log4j.ConsoleAppender
+    log4j.appender.stdout.layout=org.apache.log4j.PatternLayout
+
+    log4j.appender.connectAppender=org.apache.log4j.DailyRollingFileAppender
+    log4j.appender.connectAppender.DatePattern='.'yyyy-MM-dd-HH
+    log4j.appender.connectAppender.File=${kafka.logs.dir}/connect.log
+    log4j.appender.connectAppender.layout=org.apache.log4j.PatternLayout
+
+    connect.log.pattern=[%d] %p %X{connector.context}%m (%c:%L)%n
+
+    log4j.appender.stdout.layout.ConversionPattern=${connect.log.pattern}
+    log4j.appender.connectAppender.layout.ConversionPattern=${connect.log.pattern}
+
+    log4j.logger.org.apache.zookeeper=ERROR
+    log4j.logger.org.reflections=ERROR
+
+  connect-distributed.properties: |
+    bootstrap.servers=kafka:9092
+    group.id=connect-cluster
+
+    key.converter=org.apache.kafka.connect.json.JsonConverter
+    value.converter=org.apache.kafka.connect.json.JsonConverter
+    
+    key.converter.schemas.enable=true
+    value.converter.schemas.enable=true
+
+    offset.storage.topic=connect-offsets
+    offset.storage.replication.factor=1
+    config.storage.topic=connect-configs
+    config.storage.replication.factor=1
+
+    status.storage.topic=connect-status
+    status.storage.replication.factor=1
+    
+    offset.flush.interval.ms=10000
+    plugin.path=/usr/local/share/java,/usr/local/share/kafka/plugins,/opt/connectors,/home/kafka/connect-plugins
+---
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: connectors-config
+  labels:
+    app: connect
+data:
+  create_connector.sh: |
+    #!/bin/bash
+    echo "checking kafka status..."
+    while [ $(curl -s -o /dev/null -w %{http_code} http://connect:8083/connectors) -eq 000 ] ; do 
+        echo -e $(date) " kafka connect listener HTTP state: " $(curl -s -o /dev/null -w %{http_code} http://connect:8083/connectors) " (waiting for 200)"
+        sleep 1
+    done
+    echo "kafka connect is up!"
+    sleep 1
+    echo "creating connector $1"
+    curl -X POST -H "Content-Type: application/json" -d @/home/$1 http://connect:8083/connectors
+
+  delete_connector.sh: |
+    #!/bin/bash
+    echo "checking kafka status..."
+    while [ $(curl -s -o /dev/null -w %{http_code} http://connect:8083/connectors) -eq 000 ] ; do 
+        echo -e $(date) " kafka connect listener HTTP state: " $(curl -s -o /dev/null -w %{http_code} http://connect:8083/connectors) " (waiting for 200)"
+        sleep 1
+    done
+    echo "kafka connect is up!"
+    sleep 1
+    echo "deleting connector $1"
+    curl -X DELETE -H "Content-Type: application/json" http://connect:8083/connectors/$1
+
+  mysql_dbz_source_connector.json: |
+    {
+      "name": "petclinic-owners-mysql-src",
+      "config": {
+          "connector.class": "io.debezium.connector.mysql.MySqlConnector",
+          "key.converter": "org.apache.kafka.connect.json.JsonConverter",
+          "key.converter.schemas.enable": false,
+          "value.converter": "org.apache.kafka.connect.json.JsonConverter",
+          "value.converter.schemas.enable": false,
+          "database.hostname": "mysql",
+          "database.port": 3306,
+          "database.user": "root",
+          "database.password": "debezium",
+          "database.server.id": 12345,
+          "database.include.list": "petclinic",
+          "table.include.list": "petclinic.owners",
+          "schema.history.internal.kafka.bootstrap.servers": "kafka:9092",
+          "schema.history.internal.kafka.topic": "schema-changes.petclinic",
+          "topic.prefix": "mysql1"
+      }
+    }
+
+  mongodb_sink_connector.json: |
+    {
+      "name": "petclinic-owners-mongodb-sink",
+      "config": {
+          "connector.class": "com.mongodb.kafka.connect.MongoSinkConnector",
+          "topics": "mysql1.petclinic.owners",
+          "key.converter": "org.apache.kafka.connect.json.JsonConverter",
+          "key.converter.schemas.enable": false,
+          "value.converter": "org.apache.kafka.connect.json.JsonConverter",
+          "value.converter.schemas.enable": false,
+          "connection.uri": "mongodb://mongodb:27017",
+          "database": "petclinic",
+          "change.data.capture.handler": "com.mongodb.kafka.connect.sink.cdc.debezium.rdbms.mysql.MysqlHandler"
+      }
+    }
+
+  mongodb_source_connector.json: | 
+    {
+      "name": "petclinic-owners-mongodb-src",
+      "config": {
+          "connector.class": "io.debezium.connector.mongodb.MongoDbConnector",
+          "key.converter": "org.apache.kafka.connect.json.JsonConverter",
+          "key.converter.schemas.enable":true,
+          "value.converter": "org.apache.kafka.connect.json.JsonConverter",
+          "value.converter.schemas.enable":true,
+          "mongodb.hosts": "mongodb:27017", 
+          "mongodb.name": "mongodb",
+          "collection.include.list": "petclinic.mysql1.petclinic.owners",
+          "transforms":"unwrap,rename",
+          "transforms.unwrap.type":"io.debezium.connector.mongodb.transforms.ExtractNewDocumentState",
+          "transforms.unwrap.flatten.struct":true,
+          "transforms.rename.type":"org.apache.kafka.connect.transforms.ReplaceField$Value",
+          "transforms.rename.renames":"_id_id:id",
+          "topic.prefix": "mongodb"
+      }
+    }
+
+  mysql_jdbc_sink_connector.json: |
+    {
+      "name": "petclinic-owners-jdbc-mysql-sink",
+      "config": {
+          "topics": "mongodb.petclinic.mysql1.petclinic.owners",
+          "connector.class": "io.confluent.connect.jdbc.JdbcSinkConnector",
+          "key.converter": "org.apache.kafka.connect.json.JsonConverter",
+          "key.converter.schemas.enable":true,
+          "value.converter": "org.apache.kafka.connect.json.JsonConverter",
+          "value.converter.schemas.enable":true,
+          "connection.url": "jdbc:mysql://mysql:3306/petclinic?useSSL=false&serverTimezone=UTC",
+          "connection.user": "root",
+          "connection.password":"debezium",
+          "pk.mode":"record_value",
+          "pk.fields":"id",
+          "insert.mode":"upsert",
+          "transforms": "route",
+          "transforms.route.type": "org.apache.kafka.connect.transforms.RegexRouter",
+          "transforms.route.regex": "mongodb.*(owners)",
+          "transforms.route.replacement": "$1"
+      }
+    }

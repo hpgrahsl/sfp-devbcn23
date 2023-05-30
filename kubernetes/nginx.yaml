@@ -1,0 +1,275 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: nginx
+  annotations:
+    app.openshift.io/connects-to: '[{"apiVersion":"apps/v1","kind":"Deployment","name":"quarkus-owner-service"},{"apiVersion":"apps/v1","kind":"Deployment","name":"spring-petclinic"}]'
+  labels:
+    app: nginx
+    app.kubernetes.io/part-of: sfp-infra
+    app.openshift.io/runtime: nginx
+spec:
+  selector:
+    matchLabels:
+      app: nginx
+  strategy:
+    type: Recreate
+  template:
+    metadata:
+      labels:
+        app: nginx
+    spec:
+      containers:
+        - image: quay.io/hgrahsl/sfp-proxy:1.0.0-amd64
+          name: nginx
+          ports:
+          - containerPort: 8080
+            name: nginx
+          volumeMounts:
+            - name: proxy-config
+              mountPath: /etc/nginx/
+          imagePullPolicy: Always
+      volumes:
+        - name: proxy-config
+          configMap:
+            name: sfp-proxy-conf-initial
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: nginx
+  labels:
+    app: nginx
+spec:
+  ports:
+  - name: http
+    port: 8080
+    protocol: TCP
+    targetPort: 8080
+  selector:
+    app: nginx
+  type: NodePort
+---
+kind: Route
+apiVersion: route.openshift.io/v1
+metadata:
+  name: sfp-proxy
+  labels:
+    app: nginx
+  annotations:
+    openshift.io/host.generated: 'true'
+  managedFields:
+spec:
+  to:
+    kind: Service
+    name: nginx
+    weight: 100
+  port:
+    targetPort: http
+  wildcardPolicy: None
+---
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: sfp-proxy-conf-initial
+  labels:
+    app: nginx
+data:
+  nginx.conf: |
+    pid /tmp/nginx.pid;
+    worker_processes  1;
+    events {
+      worker_connections  1024;
+    }
+    http {
+        sendfile on;
+        index    index.html index.htm index.php;
+        default_type application/octet-stream;
+        log_format   main '$remote_addr - $remote_user [$time_local]  $status '
+            '"$request" $body_bytes_sent "$http_referer" '
+            '"$http_user_agent" "$http_x_forwarded_for"';        
+        server {
+            listen 8080;
+            location / {
+                root /usr/share/nginx/html/;
+            }
+            # SERVE ALL petclinic requests by the monolith
+            location ~* ^/petclinic(/.*)* {
+                rewrite ^/petclinic(/.*)* /petclinic/$1 break; 
+                proxy_pass         http://spring-petclinic:8080;
+                proxy_redirect     off;
+                proxy_set_header   Host $host;
+                proxy_set_header   X-Real-IP $remote_addr;
+                proxy_set_header   X-Forwarded-For $proxy_add_x_forwarded_for;
+                proxy_set_header   X-Forwarded-Host $server_name;
+            }
+        }
+    }
+---
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: sfp-proxy-conf-read
+  labels:
+    app: nginx
+data:
+  nginx.conf: |
+    pid /tmp/nginx.pid;
+    worker_processes  1;
+    events {
+      worker_connections  1024;
+    }
+
+    http {
+        sendfile on;
+        index    index.html index.htm index.php;
+        default_type application/octet-stream;
+        log_format   main '$remote_addr - $remote_user [$time_local]  $status '
+            '"$request" $body_bytes_sent "$http_referer" '
+            '"$http_user_agent" "$http_x_forwarded_for"';
+        
+        server {
+
+            listen 8080;
+
+            location / {
+                root /usr/share/nginx/html/;
+            }
+
+            # REDIRECT monolith SEARCH owner requests to microservice
+            location ~* ^/petclinic/owners(\.html)?(\?lastName.*)?$ {
+                rewrite ^/petclinic/owners(\.html)?(\?lastName.*)?$ /owners/$2 break; 
+                proxy_pass         http://quarkus-owner-service:8080;
+                proxy_redirect     off;
+                proxy_set_header   Host $host;
+                proxy_set_header   X-Real-IP $remote_addr;
+                proxy_set_header   X-Forwarded-For $proxy_add_x_forwarded_for;
+                proxy_set_header   X-Forwarded-Host $server_name;
+            }
+
+            # REDIRECT microservice WRITE owner requests to monolith
+            # until owner writes are implemented in the microservice
+            location ~* ^(/owners/[0-9]+) {
+                rewrite ^(/owners/[0-9]+) /petclinic/$1/edit.html break; 
+                proxy_pass         http://spring-petclinic:8080;
+                proxy_redirect     off;
+                proxy_set_header   Host $host;
+                proxy_set_header   X-Real-IP $remote_addr;
+                proxy_set_header   X-Forwarded-For $proxy_add_x_forwarded_for;
+                proxy_set_header   X-Forwarded-Host $server_name;
+            }
+
+            # SERVE ALL other petclinic requests by the monolith
+            location ~* ^/petclinic(/.*)* {
+                rewrite ^/petclinic(/.*)* /petclinic/$1 break; 
+                proxy_pass         http://spring-petclinic:8080;
+                proxy_redirect     off;
+                proxy_set_header   Host $host;
+                proxy_set_header   X-Real-IP $remote_addr;
+                proxy_set_header   X-Forwarded-For $proxy_add_x_forwarded_for;
+                proxy_set_header   X-Forwarded-Host $server_name;
+            }
+
+            # SERVE microservice resource requests by the microservice
+            location ~* ^(/webjars/.*|/images/.*) {
+                rewrite ^(/webjars/.*|/images/.*) $1 break; 
+                proxy_pass         http://quarkus-owner-service:8080;
+                proxy_redirect     off;
+                proxy_set_header   Host $host;
+                proxy_set_header   X-Real-IP $remote_addr;
+                proxy_set_header   X-Forwarded-For $proxy_add_x_forwarded_for;
+                proxy_set_header   X-Forwarded-Host $server_name;
+            }
+
+        }
+
+    }
+---
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: sfp-proxy-conf-read-write
+  labels:
+    app: nginx
+data:
+  nginx.conf: |
+    pid /tmp/nginx.pid;
+    worker_processes  1;
+    events {
+      worker_connections  1024;
+    }
+
+    http {
+        sendfile on;
+        index    index.html index.htm index.php;
+        default_type application/octet-stream;
+        log_format   main '$remote_addr - $remote_user [$time_local]  $status '
+            '"$request" $body_bytes_sent "$http_referer" '
+            '"$http_user_agent" "$http_x_forwarded_for"';
+        
+        server {
+
+            listen 8080;
+
+            location / {
+                root /usr/share/nginx/html/;
+            }
+
+            # REDIRECT monolith SEARCH owner requests to microservice
+            location ~* ^/petclinic/owners(\.html)?(\?lastName.*)?$ {
+                rewrite ^/petclinic/owners(\.html)?(\?lastName.*)?$ /owners/$2 break; 
+                proxy_pass         http://quarkus-owner-service:8080;
+                proxy_redirect     off;
+                proxy_set_header   Host $host;
+                proxy_set_header   X-Real-IP $remote_addr;
+                proxy_set_header   X-Forwarded-For $proxy_add_x_forwarded_for;
+                proxy_set_header   X-Forwarded-Host $server_name;
+            }
+
+            # REDIRECT microservice WRITE owner requests to microservice
+            location ~* ^/owners(/[0-9]+)*$ {
+                rewrite ^/owners(/[0-9]+)*$ /owners/$1 break; 
+                proxy_pass         http://quarkus-owner-service:8080;
+                proxy_redirect     off;
+                proxy_set_header   Host $host;
+                proxy_set_header   X-Real-IP $remote_addr;
+                proxy_set_header   X-Forwarded-For $proxy_add_x_forwarded_for;
+                proxy_set_header   X-Forwarded-Host $server_name;
+            }
+
+            # REDIRECT monolith READ requests to microservice
+            location ~* ^/petclinic/owners/([0-9]+)(/edit.html)?$ {
+                rewrite ^/petclinic/owners/([0-9]+)(/edit.html)?$ /owners/$1 break; 
+                proxy_pass         http://quarkus-owner-service:8080;
+                proxy_redirect     off;
+                proxy_set_header   Host $host;
+                proxy_set_header   X-Real-IP $remote_addr;
+                proxy_set_header   X-Forwarded-For $proxy_add_x_forwarded_for;
+                proxy_set_header   X-Forwarded-Host $server_name;
+            }
+        
+            # SERVE ALL other petclinic requests by the monolith
+            location ~* ^/petclinic(/.*)* {
+                rewrite ^/petclinic(/.*)* /petclinic/$1 break; 
+                proxy_pass         http://spring-petclinic:8080;
+                proxy_redirect     off;
+                proxy_set_header   Host $host;
+                proxy_set_header   X-Real-IP $remote_addr;
+                proxy_set_header   X-Forwarded-For $proxy_add_x_forwarded_for;
+                proxy_set_header   X-Forwarded-Host $server_name;
+            }
+
+            # SERVE microservice resource requests by the microservice
+            location ~* ^(/webjars/.*|/images/.*) {
+                rewrite ^(/webjars/.*|/images/.*) $1 break; 
+                proxy_pass         http://quarkus-owner-service:8080;
+                proxy_redirect     off;
+                proxy_set_header   Host $host;
+                proxy_set_header   X-Real-IP $remote_addr;
+                proxy_set_header   X-Forwarded-For $proxy_add_x_forwarded_for;
+                proxy_set_header   X-Forwarded-Host $server_name;
+            }
+
+        }
+
+    }

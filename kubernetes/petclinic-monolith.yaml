@@ -1,0 +1,50 @@
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: spring-petclinic
+  labels:
+    app: spring-petclinic
+spec:
+  ports:
+  - name: http
+    port: 8080
+    protocol: TCP
+    targetPort: 8080
+  selector:
+    app: spring-petclinic
+  type: ClusterIP
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  annotations:
+    app.openshift.io/connects-to: '[{"apiVersion":"apps/v1","kind":"Deployment","name":"mysql"}]'
+  name: spring-petclinic
+  labels:
+    app: spring-petclinic
+    app.openshift.io/runtime: spring
+    app.kubernetes.io/part-of: sfp-monolith
+spec:
+  selector:
+    matchLabels:
+      app: spring-petclinic
+  strategy:
+    type: Recreate
+  template:
+    metadata:
+      labels:
+        app: spring-petclinic
+    spec:
+      containers:
+        - image: quay.io/hgrahsl/sfp-petclinic-monolith:1.0.0-amd64
+          name: spring-petclinic
+          ports:
+            - containerPort: 8080
+          imagePullPolicy: Always
+          volumeMounts:
+            - name: tomcat-webapps
+              mountPath: /usr/local/tomcat/webapps/petclinic
+      volumes:
+        - name: tomcat-webapps
+          emptyDir: {}

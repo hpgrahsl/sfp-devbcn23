@@ -1,0 +1,27 @@
+---
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: delete-mongodb-sink-connector
+  labels:
+    app: delete-mongodb-sink-connector
+    app.kubernetes.io/part-of: sfp-cdc-jobs
+spec:
+  template:
+    spec:
+      containers:
+      - name: delete-mongodb-sink-connector
+        image: quay.io/debezium/tooling:1.2
+        command: [
+          "bash","/home/delete_connector.sh","petclinic-owners-mongodb-sink"
+        ]
+        volumeMounts:
+            - name: connectors-definition
+              mountPath: /home
+
+      restartPolicy: OnFailure
+      volumes:
+        - name: connectors-definition
+          configMap:
+            name: connectors-config
+  backoffLimit: 5

@@ -1,0 +1,88 @@
+---
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: mongodb-common-scripts
+  labels:
+    app: mongodb
+data:
+  replicaset-setup.sh: |
+    #!/bin/bash
+    HOST=mongodb
+    mongosh --host ${HOST}:27017 --eval "rs.initiate();"
+
+---
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: mongo-rs-initiator
+  labels:
+    app: mongodb
+    app.kubernetes.io/part-of: sfp-microservices
+spec:
+  template:
+    spec:
+      containers:
+      - name: mongo-rs-initiator
+        image: quay.io/hgrahsl/mongo:6.0.5
+        command: ["bash", "/home/replicaset-setup.sh"]
+        volumeMounts:
+            - name: common-scripts
+              mountPath: /home
+      restartPolicy: OnFailure
+      volumes:
+        - name: common-scripts
+          configMap:
+            name: mongodb-common-scripts
+  backoffLimit: 10
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: mongodb
+  labels:
+    app: mongodb
+spec:
+  ports:
+    - name: "mongodb"
+      port: 27017
+  selector:
+    app: mongodb
+  type: ClusterIP  
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: mongodb
+  labels:
+    app: mongodb
+    app.kubernetes.io/part-of: sfp-microservices
+    app.openshift.io/runtime: mongodb
+spec:
+  selector:
+    matchLabels:
+      app: mongodb
+  strategy:
+    type: RollingUpdate
+  template:
+    metadata:
+      labels:
+        app: mongodb
+    spec:
+      containers:
+        - name: mongodb
+          image: quay.io/hgrahsl/mongo:6.0.5
+          args: ["--port", "27017", "--replSet", "rs0", "--bind_ip_all"]
+          ports:
+            - name: mongodb
+              containerPort: 27017
+          volumeMounts:
+            - name: mongo-config-dir
+              mountPath: /data/configdb
+            - name: mongo-data-dir
+              mountPath: /data/db
+      volumes:
+        - name: mongo-config-dir
+          emptyDir: {}
+        - name: mongo-data-dir
+          emptyDir: {}

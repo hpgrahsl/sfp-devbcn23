@@ -1,0 +1,7 @@
+spec:
+  template:
+    spec:
+      volumes:
+        - name: proxy-config
+          configMap:
+            name: sfp-proxy-conf-read

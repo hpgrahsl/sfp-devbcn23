@@ -1,0 +1,27 @@
+---
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: create-mysql-sink-connector
+  labels:
+    app: create-mysql-sink-connector
+    app.kubernetes.io/part-of: sfp-cdc-jobs
+spec:
+  template:
+    spec:
+      containers:
+      - name: create-mysql-sink-connector
+        image: quay.io/debezium/tooling:1.2
+        command: [
+          "bash","/home/create_connector.sh","mysql_jdbc_sink_connector.json"
+        ]
+        volumeMounts:
+            - name: connectors-definition
+              mountPath: /home
+
+      restartPolicy: OnFailure
+      volumes:
+        - name: connectors-definition
+          configMap:
+            name: connectors-config
+  backoffLimit: 5
