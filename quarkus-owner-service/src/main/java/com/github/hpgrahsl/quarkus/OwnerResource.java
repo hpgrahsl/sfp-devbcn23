@@ -3,8 +3,10 @@ package com.github.hpgrahsl.quarkus;
 import io.quarkus.qute.Template;
 import io.quarkus.qute.TemplateInstance;
 import java.net.URI;
+
+import org.jboss.resteasy.reactive.MultipartForm;
+
 import jakarta.inject.Inject;
-import jakarta.ws.rs.BeanParam;
 import jakarta.ws.rs.Consumes;
 import jakarta.ws.rs.DefaultValue;
 import jakarta.ws.rs.GET;
@@ -42,16 +44,16 @@ public class OwnerResource {
   @Path("{id}")
   @Produces(MediaType.TEXT_HTML)
   public TemplateInstance getOwnerById(@PathParam("id") Integer id) {
-    return owner.data("o", repository.findByDocumentId(id).orElseThrow(NotFoundException::new));
+    return owner.data("o", repository.findByIdOptional(id).orElseThrow(NotFoundException::new));
   }
 
   @POST
   @Path("{id}")
   @Consumes(MediaType.MULTIPART_FORM_DATA)
-  public Response updateOwner(@PathParam("id") Integer id,@BeanParam OwnerFormFields ownerFormFields) {
-    Owner owner = repository.findByDocumentId(id).orElseThrow(NotFoundException::new);
-    owner = ownerFormFields.updateEntity(owner);
-    repository.update(owner);
+  public Response updateOwner(@PathParam("id") Integer id, @MultipartForm OwnerFormFields ownerFormFields) {
+    OwnerWithPets ownerWithPets = repository.findByIdOptional(id).orElseThrow(NotFoundException::new);
+    ownerWithPets = ownerFormFields.updateEntity(ownerWithPets);
+    repository.update(ownerWithPets);
     return Response.status(Status.MOVED_PERMANENTLY)
         .location(URI.create("/owners")).build();
   }

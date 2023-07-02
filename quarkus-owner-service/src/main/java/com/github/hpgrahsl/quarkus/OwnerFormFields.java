@@ -26,12 +26,12 @@ public class OwnerFormFields {
   @PartType(MediaType.TEXT_PLAIN)
   public String telephone;
 
-  public Owner updateEntity(Owner entity) {
-    entity.first_name = first_name;
-    entity.last_name = last_name;
-    entity.city = city;
-    entity.address = address;
-    entity.telephone = telephone;
+  public OwnerWithPets updateEntity(OwnerWithPets entity) {
+    entity.owner.first_name = first_name;
+    entity.owner.last_name = last_name;
+    entity.owner.city = city;
+    entity.owner.address = address;
+    entity.owner.telephone = telephone;
     return entity;
   }
 

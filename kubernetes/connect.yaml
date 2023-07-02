@@ -129,9 +129,21 @@ data:
     echo "deleting connector $1"
     curl -X DELETE -H "Content-Type: application/json" http://connect:8083/connectors/$1
 
+  update_connector.sh: |
+    #!/bin/bash
+    echo "checking kafka status..."
+    while [ $(curl -s -o /dev/null -w %{http_code} http://connect:8083/connectors) -eq 000 ] ; do 
+        echo -e $(date) " kafka connect listener HTTP state: " $(curl -s -o /dev/null -w %{http_code} http://connect:8083/connectors) " (waiting for 200)"
+        sleep 1
+    done
+    echo "kafka connect is up!"
+    sleep 1
+    echo "updating connector $1"
+    curl -X PUT -H "Content-Type: application/json" -d @/home/$2 http://connect:8083/connectors/$1/config
+
   mysql_dbz_source_connector.json: |
     {
-      "name": "petclinic-owners-mysql-src",
+      "name": "petclinic-owners-pets-mysql-src",
       "config": {
           "connector.class": "io.debezium.connector.mysql.MySqlConnector",
           "key.converter": "org.apache.kafka.connect.json.JsonConverter",
@@ -144,7 +156,7 @@ data:
           "database.password": "debezium",
           "database.server.id": 12345,
           "database.include.list": "petclinic",
-          "table.include.list": "petclinic.owners",
+          "table.include.list": "petclinic.owners,petclinic.pets",
           "schema.history.internal.kafka.bootstrap.servers": "kafka:9092",
           "schema.history.internal.kafka.topic": "schema-changes.petclinic",
           "topic.prefix": "mysql1"
@@ -153,18 +165,48 @@ data:
 
   mongodb_sink_connector.json: |
     {
-      "name": "petclinic-owners-mongodb-sink",
+      "name": "petclinic-owners-with-pets-mongodb-sink",
       "config": {
+          "topics": "kstreams.owners-with-pets",
           "connector.class": "com.mongodb.kafka.connect.MongoSinkConnector",
-          "topics": "mysql1.petclinic.owners",
+          "key.converter": "org.apache.kafka.connect.storage.StringConverter",
+          "value.converter": "org.apache.kafka.connect.json.JsonConverter",
+          "value.converter.schemas.enable":false,
+          "tasks.max": "1",
+          "connection.uri":"mongodb://mongodb:27017",
+          "database":"petclinic",
+          "document.id.strategy":"com.mongodb.kafka.connect.sink.processor.id.strategy.ProvidedInKeyStrategy",
+          "post.processor.chain":"com.mongodb.kafka.connect.sink.processor.BlockListValueProjector,com.mongodb.kafka.connect.sink.processor.field.renaming.RenameByMapping",
+          "field.renamer.mapping":"[{\"oldName\":\"value.owner.id\", \"newName\":\"owner_id\"}]",
+          "value.projection.type":"BlockList",
+          "value.projection.list":"pets.id,pets.owner_id,pets.birth_date,pets.type_id",
+          "transforms":"createkey,flatkey,renameid",
+          "transforms.createkey.type":"org.apache.kafka.connect.transforms.ValueToKey",
+          "transforms.createkey.fields":"owner",
+          "transforms.flatkey.type":"org.apache.kafka.connect.transforms.Flatten$Key",
+          "transforms.flatkey.delimiter":"_",
+          "transforms.renameid.type": "org.apache.kafka.connect.transforms.ReplaceField$Key",
+          "transforms.renameid.renames": "owner_id:_id"
+      }
+    }
+
+  mysql_dbz_source_connector_patched.json: |
+    {
+          "connector.class": "io.debezium.connector.mysql.MySqlConnector",
           "key.converter": "org.apache.kafka.connect.json.JsonConverter",
           "key.converter.schemas.enable": false,
           "value.converter": "org.apache.kafka.connect.json.JsonConverter",
           "value.converter.schemas.enable": false,
-          "connection.uri": "mongodb://mongodb:27017",
-          "database": "petclinic",
-          "change.data.capture.handler": "com.mongodb.kafka.connect.sink.cdc.debezium.rdbms.mysql.MysqlHandler"
-      }
+          "database.hostname": "mysql",
+          "database.port": 3306,
+          "database.user": "root",
+          "database.password": "debezium",
+          "database.server.id": 12345,
+          "database.include.list": "petclinic",
+          "table.include.list": "petclinic.pets",
+          "schema.history.internal.kafka.bootstrap.servers": "kafka:9092",
+          "schema.history.internal.kafka.topic": "schema-changes.petclinic",
+          "topic.prefix": "mysql1"
     }
 
   mongodb_source_connector.json: | 
@@ -178,12 +220,15 @@ data:
           "value.converter.schemas.enable":true,
           "mongodb.hosts": "mongodb:27017", 
           "mongodb.name": "mongodb",
-          "collection.include.list": "petclinic.mysql1.petclinic.owners",
-          "transforms":"unwrap,rename",
+          "collection.include.list": "petclinic.kstreams.owners-with-pets",
+          "transforms":"unwrap,filter,rename",
           "transforms.unwrap.type":"io.debezium.connector.mongodb.transforms.ExtractNewDocumentState",
+          "transforms.unwrap.array.encoding":"document",
           "transforms.unwrap.flatten.struct":true,
+          "transforms.filter.type":"org.apache.kafka.connect.transforms.ReplaceField$Value",
+          "transforms.filter.whitelist":"owner_owner_id,owner_address,owner_city,owner_first_name,owner_last_name,owner_telephone",
           "transforms.rename.type":"org.apache.kafka.connect.transforms.ReplaceField$Value",
-          "transforms.rename.renames":"_id_id:id",
+          "transforms.rename.renames":"owner_owner_id:id,owner_address:address,owner_city:city,owner_first_name:first_name,owner_last_name:last_name,owner_telephone:telephone",
           "topic.prefix": "mongodb"
       }
     }
@@ -192,7 +237,7 @@ data:
     {
       "name": "petclinic-owners-jdbc-mysql-sink",
       "config": {
-          "topics": "mongodb.petclinic.mysql1.petclinic.owners",
+          "topics": "mongodb.petclinic.kstreams.owners-with-pets",
           "connector.class": "io.confluent.connect.jdbc.JdbcSinkConnector",
           "key.converter": "org.apache.kafka.connect.json.JsonConverter",
           "key.converter.schemas.enable":true,
@@ -206,7 +251,7 @@ data:
           "insert.mode":"upsert",
           "transforms": "route",
           "transforms.route.type": "org.apache.kafka.connect.transforms.RegexRouter",
-          "transforms.route.regex": "mongodb.*(owners)",
+          "transforms.route.regex": "mongodb.*(owners).*",
           "transforms.route.replacement": "$1"
       }
     }

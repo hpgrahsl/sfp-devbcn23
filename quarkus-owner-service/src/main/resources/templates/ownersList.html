@@ -1,5 +1,5 @@
-{@java.util.Collection<com.github.hpgrahsl.quarkus.Owner> owners}
-{@com.github.hpgrahsl.quarkus.Owner o}
+{@java.util.Collection<com.github.hpgrahsl.quarkus.OwnerWithPets> owners}
+{@com.github.hpgrahsl.quarkus.OwnerWithPets o}
   {#include page.html}
   {#title}Owners{/title}
   {#content}
@@ -15,14 +15,20 @@
       <th>Address</th>
       <th>City</th>
       <th>Telephone</th>
+      <th>Pets</th>
     </tr>
     </thead>
     {#for o in owners}
     <tr>
-      <td><a href="/owners/{o._id.get('id')}">{o.first_name} {o.last_name}</a></td>
-      <td>{o.address}</td>
-      <td>{o.city}</td>
-      <td>{o.telephone}</td>
+      <td><a href="/owners/{o._id}">{o.owner.first_name} {o.owner.last_name}</a></td>
+      <td>{o.owner.address}</td>
+      <td>{o.owner.city}</td>
+      <td>{o.owner.telephone}</td>
+      <td>
+        {#for p in o.pets}
+          <span>{p.name}&nbsp;</span>
+        {/for}
+      </td>
     </tr>
     {/for}
   </table>

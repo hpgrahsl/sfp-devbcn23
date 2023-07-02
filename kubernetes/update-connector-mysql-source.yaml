@@ -2,18 +2,18 @@
 apiVersion: batch/v1
 kind: Job
 metadata:
-  name: delete-mysql-source-connector
+  name: update-mysql-source-connector
   labels:
-    app: delete-mysql-source-connector
+    app: update-mysql-source-connector
     app.kubernetes.io/part-of: sfp-cdc-jobs
 spec:
   template:
     spec:
       containers:
-      - name: delete-mysql-source-connector
+      - name: update-mysql-source-connector
         image: quay.io/debezium/tooling:1.2
         command: [
-          "bash","/home/delete_connector.sh","petclinic-owners-mysql-src"
+          "bash","/home/update_connector.sh","petclinic-owners-pets-mysql-src","mysql_dbz_source_connector_patched.json"
         ]
         volumeMounts:
             - name: connectors-definition
